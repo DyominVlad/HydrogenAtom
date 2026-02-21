@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="HydrogenAtom/HydrogenAtom.vcxproj" Id="25e05644-6774-4342-bec4-7e9d7dfb5d70" />
+</Solution>
