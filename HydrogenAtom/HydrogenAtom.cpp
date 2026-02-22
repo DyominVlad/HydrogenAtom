@@ -8,6 +8,7 @@
 #include <cmath>
 #include <ctime>
 #include <cstdlib>
+#include <random>
 #include <vector>
 
 #ifndef  M_PI
@@ -24,7 +25,7 @@ float orbitDistance = 15.0f;
 struct Engine {
 
 	GLFWwindow* window;
-	int WIDTH = 1000, HEIGHT = 1000;
+	int WIDTH = 1100, HEIGHT = 1100;
 
 	Engine() {
 		// --- Init GLFW ---
@@ -219,7 +220,7 @@ struct Particle {
 
 		if (excitedTimer <= 0.0 && n > 1) {
 			n--;
-			excitedTimer += 0.1;
+			excitedTimer += 0.1f;
 
 			float waveDirX = float(rand() / RAND_MAX) * 2.0f - 1.0f;
 			float waveDirY = float(rand() / RAND_MAX) * 2.0f - 1.0f;
@@ -240,29 +241,65 @@ struct Atom {
 	vec2 pos;
 	vec2 v = vec2(0.0);
 	std::vector<Particle> particles = { };
-	Atom(vec2 p) : pos(p) {
+	Atom(vec2 p, vec2 v) : pos(p), v(v) {
 		particles.emplace_back(pos, 1);
 		particles.emplace_back(vec2(pos.x - orbitDistance, pos.y), -1);
 	
+	}
+	void update(float dt) {
+		pos += v * dt;  // Движение по инерции
 	}
 };
 
 vector<Atom> atoms { };
 
+// Физические константы
+const double BOLTZMANN_CONST = 1;  // k = 1.380649e-23 Дж/К
+const double ATOMIC_MASS_UNIT = 1; // 1 а.е.м. = 1.660539e-27 кг
+
+// Модифицированная функция с температурой в Кельвинах
+vec2 maxwellVelocity2D(float temperatureKelvin, float massAMU = 1.0f) {
+	// temperatureKelvin - температура в Кельвинах
+	// massAMU - масса частицы в атомных единицах массы (по умолчанию 1 для водорода)
+
+	static std::random_device rd;
+	static std::mt19937 gen(rd());
+	static std::normal_distribution<> normal(0.0, 1.0);
+
+	// Переводим массу из а.е.м. в кг
+	double massKg = massAMU * ATOMIC_MASS_UNIT;
+
+	// Вычисляем sigma = sqrt(kT/m)
+	// kT - тепловая энергия в Джоулях
+	double kT = BOLTZMANN_CONST * temperatureKelvin;
+	double sigma = sqrt(kT / massKg);
+
+	// Возвращаем скорость в м/с
+	return vec2(
+		normal(gen) * sigma,
+		normal(gen) * sigma);
+}
+
 int main() 
 {
-	srand(time(nullptr));
+	srand(time(NULL));
 
 	// Initialize 20 atoms in a circle at the center
-	{
-		int num_atoms = 150;
-		float radius = 100.0f; // Radius of the circle
-		for (int i = 0; i < num_atoms; i++) {
-			float angle = 2.0f * M_PI * i / num_atoms;
-			float x = cos(angle) * radius;
-			float y = sin(angle) * radius;
-			atoms.emplace_back(vec2(x, y));
-		}
+	int num_atoms = 200;
+	float radius = 100.0f; // Radius of the circle
+	float maxSpeed = 5.0f;
+	float T = 5.0f;
+
+	for (int i = 0; i < num_atoms; i++) {
+
+		vec2 pos(
+			((float)rand() / RAND_MAX - 0.5f) * (engine.WIDTH - 200),
+			((float)rand() / RAND_MAX - 0.5f) * (engine.HEIGHT - 200)
+		);
+
+		vec2 v = maxwellVelocity2D(T);
+
+		atoms.emplace_back(pos, v);
 	}
 
 	// callbacks
@@ -279,82 +316,50 @@ int main()
 		float dt = 0.1f; // Шаг времени
 
 		for (Atom& a : atoms) {
-			// --- Сохраняем старую позицию для проверки коллизий ---
-			vec2 oldPos = a.pos;
+			// Обновляем позицию
+			a.update(dt);
 
-			// --- Применяем силы ---
-
-			// 1. Отталкивание между атомами (как молекулы газа)
-			for (Atom& a2 : atoms) {
-				if (&a2 == &a) continue;
-
-				vec2 delta = a.pos - a2.pos;
-				float dist = length(delta);
-				float minDist = 100.0f; // Минимальное расстояние (диаметр атома)
-
-				if (dist < minDist && dist > 0.01f) {
-					vec2 dir = normalize(delta);
-					// Сильное отталкивание при столкновении
-					float overlap = minDist - dist;
-					a.pos += dir * overlap * 0.5f; // Раздвигаем атомы
-					a2.pos -= dir * overlap * 0.5f;
-
-					// Обмен импульсами (упругое столкновение)
-					vec2 v1 = a.v;
-					vec2 v2 = a2.v;
-					a.v = v1 - 2.0f * dot(v1 - v2, dir) * dir / 2.0f;
-					a2.v = v2 - 2.0f * dot(v2 - v1, -dir) * (-dir) / 2.0f;
-				}
-			}
-
-			// 2. Гравитация (опционально)
-			// a.v.y -= 0.1f * dt;
-
-			// 3. Обновляем позицию
-			a.pos += a.v * dt;
-
-			// --- ЖЕСТКИЕ СТЕНКИ (как у газового сосуда) ---
+			// УПРУГОЕ СТОЛКНОВЕНИЕ СО СТЕНКАМИ
 			float halfW = engine.WIDTH / 2.0f;
 			float halfH = engine.HEIGHT / 2.0f;
-			float atomRadius = 50.0f; // Радиус атома
 
 			// Левая стенка
-			if (a.pos.x - atomRadius < -halfW) {
-				a.pos.x = -halfW + atomRadius;
-				a.v.x = -a.v.x * 1.0f; // 1.0f = абсолютно упругий удар
+			if (a.pos.x < -halfW) {
+				a.pos.x = -halfW;  // Корректируем позицию
+				a.v.x = -a.v.x;                // Меняем направление (упругий удар)
 			}
 
 			// Правая стенка
-			if (a.pos.x + atomRadius > halfW) {
-				a.pos.x = halfW - atomRadius;
-				a.v.x = -a.v.x * 1.0f;
+			if (a.pos.x > halfW) {
+				a.pos.x = halfW;
+				a.v.x = -a.v.x;
 			}
 
 			// Нижняя стенка
-			if (a.pos.y - atomRadius < -halfH) {
-				a.pos.y = -halfH + atomRadius;
-				a.v.y = -a.v.y * 1.0f;
+			if (a.pos.y < -halfH) {
+				a.pos.y = -halfH;
+				a.v.y = -a.v.y;
 			}
 
 			// Верхняя стенка
-			if (a.pos.y + atomRadius > halfH) {
-				a.pos.y = halfH - atomRadius;
-				a.v.y = -a.v.y * 1.0f;
+			if (a.pos.y > halfH) {
+				a.pos.y = halfH;
+				a.v.y = -a.v.y;
 			}
-
-			// --- Рисуем "стенки сосуда" для наглядности ---
-			glLineWidth(3.0f);
-			glColor3f(0.7f, 0.7f, 0.7f);
-			glBegin(GL_LINE_LOOP);
-			glVertex2f(-halfW + 2, -halfH + 2);
-			glVertex2f(halfW - 2, -halfH + 2);
-			glVertex2f(halfW - 2, halfH - 2);
-			glVertex2f(-halfW + 2, halfH - 2);
-			glEnd();
 		}
+		// --- Рисуем границы сосуда ---
+		glLineWidth(2.0f);
+		glColor3f(0.5f, 0.5f, 0.5f);
+		glBegin(GL_LINE_LOOP);
+		glVertex2f(float(-engine.WIDTH) / 2 + 10, float(-engine.HEIGHT) / 2 + 10);
+		glVertex2f(float(engine.WIDTH )/ 2 - 10, float(-engine.HEIGHT) / 2 + 10);
+		glVertex2f(float(engine.WIDTH )/ 2 - 10, float(engine.HEIGHT) / 2 - 10);
+		glVertex2f(float(-engine.WIDTH) / 2 + 10, float(engine.HEIGHT) / 2 - 10);
+		glEnd();
+
 
 		// --- Draw particles ----
-		for (Atom& a: atoms) {
+		for (Atom& a : atoms) {
 			for (Particle& p : a.particles) {
 				p.draw(a.pos);
 
@@ -401,6 +406,5 @@ int main()
 		glfwSwapBuffers(engine.window);
 		glfwPollEvents();
 	}
-
 	return 0;
 }
